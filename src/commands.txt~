@@ -1,0 +1,30 @@
+For Router:
+
+./router --port=3333 --drop-rate=0.0 --max-delay=0ms --seed=1
+./router --port=3333 --drop-rate=0.3 --max-delay=10ms --seed=1
+./router --port=3333 --drop-rate=0.2
+./router --port=3333 --max-delay=10ms
+
+
+For Server :
+
+httpfs -v -p 8080
+
+httpfs -v -p 8080 -d D:\Concordia studies\Computer_Networks\HarshBahi\Assignments\Assignment 3\Demo
+
+
+For Client :
+
+httpc http://localhost:8080/get/
+httpc http://localhost:8080/post/PostTestFile.txt -v -d '{"Assignment":3, "Course" : 6461}'
+httpc http://localhost:8080/post/PostTestFile.txt -v -h Content-Type:application/json -d '{"Assignment":3, "Course" : 6461}'
+httpc http://localhost:8080/post/PostTestFile.txt -d '{"Assignment":3, "Course" : 6461}'
+httpc http://localhost:8080/post/JSONTestFile.json -d '{"Assignment":3}'
+httpc http://localhost:8080/get/GetTestFile.txt
+httpc http://localhost:8080/get/PostTestFile.txt
+httpc http://localhost:8080/post/PostTestFile2.txt -d Hello World
+
+httpc http://localhost:8080/get/griffin.txt
+httpc http://localhost:8080/get/demo_file.txt
+
+
