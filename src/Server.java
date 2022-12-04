@@ -13,111 +13,129 @@ import java.util.*;
 public class Server {
 
     private static int statusCode = 200;
-    ;
     static boolean debugFlag = false;
-    static String dir = System.getProperty("user.dir");
-    static List<String> filelist = new ArrayList<>();
-
+    static String defaultDirectory = System.getProperty("user.dir");
+    static List<String> fileList = new ArrayList<>();
     static File currentFolder;
-    static int timeout = 3000;
-    static int port = 8080;
+    public static int serverPort = 8080;
 
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
         String request;
-
-
         System.out.print("Please start your server : ");
-        Scanner sc = new Scanner(System.in);
 
-        request = sc.nextLine();
-        if (request.isEmpty()) {
-            System.out.println("Invalid Command entered, try again.");
-        }
-        String[] requestArray = request.split(" ");
+        request = getInputFromUser();
+        List<String> serverStartRequestSplitList = Arrays.asList(request.split(" "));
 
-        List<String> requestList = new ArrayList<>(Arrays.asList(requestArray));
-
-        if (requestList.contains("-v")) {
+        //Setting the debug flag
+        if (serverStartRequestSplitList.contains("-v")) {
             debugFlag = true;
         }
 
-        if (requestList.contains("-p")) {
-            String portStr = requestList.get(requestList.indexOf("-p") + 1).trim();
-            port = Integer.parseInt(portStr);
+        //setting the port number
+        if (serverStartRequestSplitList.contains("-p")) {
+            String portStr = serverStartRequestSplitList.get(serverStartRequestSplitList.indexOf("-p") + 1).trim();
+            serverPort = Integer.parseInt(portStr);
         }
 
-        if (requestList.contains("-d"))
-            dir = request.substring(request.indexOf("-d") + 3);
+        //setting USER PROVIDED directory as default directory
+        if (serverStartRequestSplitList.contains("-d"))
+            defaultDirectory = request.substring(request.indexOf("-d") + 3);
 
-        System.out.println("\nCurrent Working Directory : " + dir + "");
-
+        System.out.println("\nServer's Current Working Directory : " + defaultDirectory);
 
         if (debugFlag)
-            System.out.println("Server is now running at port " + port);
+            System.out.println("Server is now running at port " + serverPort);
 
-        currentFolder = new File(dir);
+        currentFolder = new File(defaultDirectory);
 
         Server server = new Server();
-
         Runnable task = () -> {
             try {
-                server.listenAndServe(port);
+                server.ListenAndServeIncomingClientRequests(serverPort);
             } catch (Exception e) {
                 e.printStackTrace();
             }
         };
         Thread thread = new Thread(task);
         thread.start();
+    }
 
+    private static String getInputFromUser() {
+        String request;
+        Scanner serverInputScanner = new Scanner(System.in);
+        request = serverInputScanner.nextLine();
+        if (request.isEmpty()) {
+            System.out.println("Invalid Command entered, try again.");
+        }
+        return request;
     }
 
     /**
      * This method will extract payload from client request
      */
-    private void listenAndServe(int port) throws Exception {
-        try (DatagramChannel channel = DatagramChannel.open()) {
-            channel.bind(new InetSocketAddress(port));  //will open datagram channel that will receive packets on port 8080
-            Packet response;
-            ByteBuffer buf = ByteBuffer.allocate(Packet.MAX_LEN).order(ByteOrder.BIG_ENDIAN);
+    private void ListenAndServeIncomingClientRequests(int serverPort) throws Exception {
+        //will open datagram channel that will receive packets on port 8080
+        try (DatagramChannel serverRouterDatagramChannel = DatagramChannel.open()) {
+            serverRouterDatagramChannel.bind(new InetSocketAddress(serverPort));
+            Packet responsePacketFromServer;
+            ByteBuffer buf = ByteBuffer.allocate(Packet.MAXIMUM_BYTES_FOR_UDP_REQUEST).order(ByteOrder.BIG_ENDIAN);
 
-            for (; ; ) {
+            while (true) {
                 buf.clear();
-                SocketAddress router = channel.receive(buf); //The receive() method will copy the content of a received packet of data into the given Buffer.
+
+                //The receive() method will copy the content of a received packet of data into the given Buffer.
+                SocketAddress router = serverRouterDatagramChannel.receive(buf);
+
                 if (router != null) {
                     // Parse a packet from the received raw data.
                     buf.flip();
-                    Packet packet = Packet.fromBuffer(buf);
+                    Packet incomingPacketFromRouter = Packet.fromBuffer(buf);
                     buf.flip();
 
-                    String requestPayload = new String(packet.getPayload(), UTF_8);
-                    // Send the response to the router not the client.
-                    // The peer address of the packet is the address of the client already.
-                    // We can use toBuilder to copy properties of the current packet.
-                    // This demonstrates how to create a new packet from an existing packet.
+                    String requestPayloadFromClient = new String(incomingPacketFromRouter.getPayload(), UTF_8);
 
-                    if (requestPayload.equals("Hi S")) {
-                        System.out.println("Client: " + requestPayload);
-                        response = packet.toBuilder().setPayload("Hi C".getBytes()).create();
-                        channel.send(response.toBuffer(), router);
+                    /*
+                     * Send the response to the router not the client.
+                     * The peer address of the packet is the address of the client already.
+                     * We can use toBuilder to copy properties of the current packet.
+                     * This demonstrates how to create a new packet from an existing packet.
+                     */
+                    // Sending Hello message to client if the request payload is a hello greeting from client
+                    if (requestPayloadFromClient.equals("Hi Server, I am Client")) {
+                        System.out.println("Payload from Client : " + requestPayloadFromClient);
+                        responsePacketFromServer = incomingPacketFromRouter.toBuilder().setPayload("Hi Client, I'm Server. Nice To meet you!!".getBytes()).create();
+                        serverRouterDatagramChannel.send(responsePacketFromServer.toBuffer(), router);
                         System.out.println("Sending Hi from Server");
-                    } else if (requestPayload.contains("httpfs") || requestPayload.contains("httpc")) {
-                        System.out.println("Client: " + requestPayload);
-                        String responsePayload = processPayloadRequest(requestPayload);
-                        if (responsePayload.getBytes().length > Packet.MAX_LEN)
-                            response = packet.toBuilder().setPayload("Data size exceeds allowed limit".getBytes()).create();
-                        else
-                            response = packet.toBuilder().setPayload(responsePayload.getBytes()).create();
-                        channel.send(response.toBuffer(), router);
+                    }
+                    //checking if the request is of the type htpfs or httpc and execute accordingly
+                    else if (requestPayloadFromClient.contains("httpfs") || requestPayloadFromClient.contains("httpc")) {
+                        System.out.println("Payload from Client : " + requestPayloadFromClient);
+                        String responsePayload = processPayloadRequest(requestPayloadFromClient);
 
-                    } else if (requestPayload.equals("Received")) {
-                        System.out.println("Client: " + requestPayload + "\nSending Close");
-                        response = packet.toBuilder().setPayload("Close".getBytes()).create();
-                        channel.send(response.toBuffer(), router);
+                        //We can't send the data since it exceeds the maximum size of the packet
+                        if (responsePayload.getBytes().length > Packet.MAXIMUM_BYTES_FOR_UDP_REQUEST) {
+                            responsePacketFromServer = incomingPacketFromRouter.toBuilder().setPayload("Data size exceeds allowed limit".getBytes()).create();
+                        }
+                        //If the repsonse payload is within the size limit then we prepare the response accordingly and send it to the client
+                        else {
+                            responsePacketFromServer = incomingPacketFromRouter.toBuilder().setPayload(responsePayload.getBytes()).create();
+                        }
 
-                    } else if (requestPayload.equals("Ok")) {
-                        System.out.println("Client: " + requestPayload);
-                        System.out.println(requestPayload + " received..!");
+                        serverRouterDatagramChannel.send(responsePacketFromServer.toBuffer(), router);
+
+                    }
+                    // Checking if the request is actually an ACKNOWLEDGMENT request
+                    else if (requestPayloadFromClient.equals("Received")) {
+                        System.out.println("Client: " + requestPayloadFromClient + "\nSending Close");
+                        responsePacketFromServer = incomingPacketFromRouter.toBuilder().setPayload("Close".getBytes()).create();
+                        serverRouterDatagramChannel.send(responsePacketFromServer.toBuffer(), router);
+
+                    }
+                    // Checking if client sent a connection termination request
+                    else if (requestPayloadFromClient.equals("Ok")) {
+                        System.out.println("Client: " + requestPayloadFromClient);
+                        System.out.println(requestPayloadFromClient + " received..!");
 
                     }
                 }
@@ -127,71 +145,68 @@ public class Server {
     }
 
     /**
-     * This method proccesses the payload request from the client's input and will return the response body.
+     * This method processes the payload request from the client's input and will return the response body.
      *
      * @param request client's request
      * @return response body
      */
     private String processPayloadRequest(String request) throws Exception {
 
-        String url = "";
-        String response = "";
+        String clientUrl = "";
+        String response;
         String verboseBody = "";
         boolean verbose = false;
+        //checking overwrite flag
         boolean overwrite = !request.contains("-overwrite=false");
 
-        List<String> requestData = Arrays.asList(request.split(" "));
+        List<String> clientRequestSplitList = Arrays.asList(request.split(" "));
 
         if (debugFlag)
             System.out.println("Server is processing Payload Request");
 
 
-        for (String d : requestData) {
-            if (d.startsWith("http://"))
-                url = d;
+        for (String clientRequest : clientRequestSplitList) {
+            if (clientRequest.startsWith("http://"))
+                clientUrl = clientRequest;
         }
 
-        if (url.contains(" ")) {
-            url = url.split(" ")[0];
+        if (clientUrl.contains(" ")) {
+            clientUrl = clientUrl.split(" ")[0];
         }
 
-        URI uri = new URI(url);
+        String host = new URI(clientUrl).getHost();
 
-        String host = uri.getHost();
-
-
-        if (requestData.contains("-v"))
+        if (clientRequestSplitList.contains("-v"))
             verbose = true;
 
+        StringBuilder body = new StringBuilder("{\n");
+        body.append("\t\"args\":");
+        body.append("{},\n");
+        body.append("\t\"headers\": {");
 
-        String body = "{\n";
-        body = body + "\t\"args\":";
-        body = body + "{},\n";
-        body = body + "\t\"headers\": {";
 
+        for (int i = 0; i < clientRequestSplitList.size(); i++) {
+            if (clientRequestSplitList.get(i).equals("-h")) {
 
-        for (int i = 0; i < requestData.size(); i++) {
-            if (requestData.get(i).equals("-h")) {
-
-                String t1 = requestData.get(i + 1).split(":")[0];
-                String t2 = requestData.get(i + 1).split(":")[1];
-                body = body + "\n\t\t\"" + t1 + "\": \"" + t2 + "\",";
+                String t1 = clientRequestSplitList.get(i + 1).split(":")[0];
+                String t2 = clientRequestSplitList.get(i + 1).split(":")[1];
+                body.append("\n\t\t\"").append(t1).append("\": \"").append(t2).append("\",");
             }
         }
 
 
-        body = body + "\n\t\t\"Connection\": \"close\",\n";
-        body = body + "\t\t\"Host\": \"" + host + "\"\n";
+        body.append("\n\t\t\"Connection\": \"close\",\n");
+        body.append("\t\t\"Host\": \"").append(host).append("\"\n");
 
 
-        body = body + "\t},\n";
+        body.append("\t},\n");
 
         // GET or POST
         String requestType;
 
-        if (url.endsWith("get/"))
+        if (clientUrl.endsWith("get/"))
             requestType = "GetFilesList";
-        else if (url.contains("get"))
+        else if (clientUrl.contains("get"))
             requestType = "GetFileContent";
         else
             requestType = "POST";
@@ -202,18 +217,18 @@ public class Server {
             case "GetFilesList": {
 
 //            parentDirectory = currentFolder;
-                filelist = new ArrayList<>();
-                body = body + "\t\"files\": { ";
-                List<String> files = getFilesFromDir(currentFolder, filelist);
+                fileList = new ArrayList<>();
+                body.append("\t\"files\": { ");
+                List<String> files = getFilesFromDir(currentFolder, fileList);
 
                 //Can use files directly
                 List<String> fileFilterList = new ArrayList<String>(files);
 
                 for (int i = 0; i < fileFilterList.size() - 1; i++) {
-                    body = body + files.get(i) + " ,\n\t\t\t    ";
+                    body.append(files.get(i)).append(" ,\n\t\t\t    ");
                 }
 
-                body = body + fileFilterList.get(fileFilterList.size() - 1) + " },\n";
+                body.append(fileFilterList.get(fileFilterList.size() - 1)).append(" },\n");
                 statusCode = 200;
 
                 break;
@@ -225,9 +240,9 @@ public class Server {
                 String fileContent = "";
 
                 String requestedFile;
-                requestedFile = url.substring(url.indexOf("get/") + 4);
+                requestedFile = clientUrl.substring(clientUrl.indexOf("get/") + 4);
 
-                List<String> files = getFilesFromDir(currentFolder, filelist);
+                List<String> files = getFilesFromDir(currentFolder, fileList);
                 System.out.println("Final file list:" + files);
 
 
@@ -235,9 +250,9 @@ public class Server {
                     statusCode = 404;
                 } else {
 
-                    File file = new File(dir + "/" + requestedFile);
+                    File file = new File(defaultDirectory + "/" + requestedFile);
                     fileContent = readDataFromFile(file);
-                    body = body + "\t\"data\": \"" + fileContent + "\",\n";
+                    body.append("\t\"data\": \"").append(fileContent).append("\",\n");
 
                     statusCode = 200;
                 }
@@ -250,10 +265,10 @@ public class Server {
             case "POST": {
 
                 String requestedFile;
-                String data = "";
+                StringBuilder data = new StringBuilder();
 
-                requestedFile = url.substring(url.indexOf("post/") + 5);
-                List<String> files = getFilesFromDir(currentFolder, filelist);
+                requestedFile = clientUrl.substring(clientUrl.indexOf("post/") + 5);
+                List<String> files = getFilesFromDir(currentFolder, fileList);
 
 
                 if (!files.contains(requestedFile))
@@ -261,39 +276,39 @@ public class Server {
                 else
                     statusCode = 201;
 
-                int index = requestData.indexOf("-d");
+                int index = clientRequestSplitList.indexOf("-d");
 
-                for (int i = index + 1; i < requestData.size(); i++) {
+                for (int i = index + 1; i < clientRequestSplitList.size(); i++) {
                     //System.out.println(data + " data is this");
-                    if (!requestData.get(i).equals("-overwrite=false"))
-                        data = data + requestData.get(i) + " ";
+                    if (!clientRequestSplitList.get(i).equals("-overwrite=false"))
+                        data.append(clientRequestSplitList.get(i)).append(" ");
                 }
 
 
-                File file = new File(dir + "/" + requestedFile);
-                writeResponseToFile(file, data, overwrite);
+                File file = new File(defaultDirectory + "/" + requestedFile);
+                writeResponseToFile(file, data.toString(), overwrite);
 
                 break;
             }
         }
 
         if (statusCode == 200) {
-            body = body + "\t\"status\": \"" + "HTTP/1.1 200 OK" + "\",\n";
+            body.append("\t\"status\": \"").append("HTTP/1.1 200 OK").append("\",\n");
         } else if (statusCode == 201) {
             if (overwrite)
-                body = body + "\t\"status\": \"" + "HTTP/1.1 201 FILE WAS OVER-WRITTEN" + "\",\n";
+                body.append("\t\"status\": \"").append("HTTP/1.1 201 FILE WAS OVER-WRITTEN").append("\",\n");
             else
-                body = body + "\t\"status\": \"" + "HTTP/1.1 201 FILE WAS NOT OVER-WRITTEN" + "\",\n";
+                body.append("\t\"status\": \"").append("HTTP/1.1 201 FILE WAS NOT OVER-WRITTEN").append("\",\n");
         } else if (statusCode == 202) {
-            body = body + "\t\"status\": \"" + "HTTP/1.1 202 NEW FILE CREATED" + "\",\n";
+            body.append("\t\"status\": \"").append("HTTP/1.1 202 NEW FILE CREATED").append("\",\n");
         } else if (statusCode == 404) {
-            body = body + "\t\"status\": \"" + "HTTP/1.1 404 FILE NOT FOUND" + "\",\n";
+            body.append("\t\"status\": \"").append("HTTP/1.1 404 FILE NOT FOUND").append("\",\n");
         }
 
 
-        body = body + "\t\"origin\": \"" + InetAddress.getLocalHost().getHostAddress() + "\",\n";
-        body = body + "\t\"url\": \"" + url + "\"\n";
-        body = body + "}\n";
+        body.append("\t\"origin\": \"").append(InetAddress.getLocalHost().getHostAddress()).append("\",\n");
+        body.append("\t\"url\": \"").append(clientUrl).append("\"\n");
+        body.append("}\n");
 
 
         if (verbose) {
@@ -309,7 +324,7 @@ public class Server {
             response = verboseBody;
             response = response + body;
         } else {
-            response = body;
+            response = body.toString();
         }
 
 
@@ -318,7 +333,7 @@ public class Server {
 
         }
 
-        System.out.println(url);
+        System.out.println(clientUrl);
         System.out.println("response size:" + response.getBytes().length);
         System.out.println("response:" + response);
         return response;
@@ -348,7 +363,7 @@ public class Server {
                 if (!filelist.contains(file.getName()))
                     filelist.add(file.getName());
 
-                //System.out.println("dir is recusive" + filelist);
+                //System.out.println("dir is recursive" + filelist);
                 getFilesFromDir(file, filelist);
             }
             //to list the files and the subdirectories, but the packet size is an issue!!!
