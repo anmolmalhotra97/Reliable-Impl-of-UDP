@@ -22,135 +22,156 @@ import java.util.Set;
  */
 public class Client {
 
-    static int acknowledgementCount = 0;
+    public static int acknowledgementCount = 0;
+    public static long sequenceNumber = 0;
+    public static List<Long> receivedPackets = new ArrayList<>();
 
-    static long sequenceNumber = 0;
-    static List<Long> receivedPackets = new ArrayList<>();
-    static int timeout = 3000;
+    //Setting the Timeout for the Request to be retransmitted
+    public static final int timeout = 3000;
 
+    // Router Host and Port Number
+    public static final String routerHost = "localhost";
+    public static final int routerPort = 3333;
 
     public static void main(String[] args) throws Exception {
 
-        // Router address
-        String routerHost = "localhost";
-        int routerPort = 3333;
 
         ArrayList<String> requestList;
         File file = new File("attachment");
         file.mkdir();
         while (true) {
-            String url = "";
-            String request = "";
-            System.out.print("Enter command : ");
+
+            //initializing some variables for the request to be sent
+            String serverURL = "";
+            String clientRequest = "";
             receivedPackets.clear();
             sequenceNumber = 0;
             acknowledgementCount = 0;
-            Scanner sc = new Scanner(System.in);
-            request = sc.nextLine();
 
-            if (request.isEmpty() || request.length() == 0) {
-                System.out.println("Invalid Command");
-                continue;
-            }
-            String[] clientRequestArray = request.split(" ");
-            requestList = new ArrayList<>();
-            for (String s : clientRequestArray) {
-                if (s.startsWith("http://")) {
-                    url = s;
-                }
-                requestList.add(s);
-            }
+            //Get input from the user and validate
+            clientRequest = getInputFromUser();
+            if (clientRequest == null) continue;
 
-            String serverHost = new URL(url).getHost();
-            int serverPort = new URL(url).getPort();
-//            System.out.println(serverHost);
-//            System.out.println(serverPort);
 
-            SocketAddress routerAddress = new InetSocketAddress(routerHost, routerPort);
-            InetSocketAddress serverAddress = new InetSocketAddress(serverHost, serverPort);
+            //Fetching the Server URL and Port from The client Request
+            serverURL = retrieveServerURL(serverURL, clientRequest);
+            String serverHost = new URL(serverURL).getHost();
+            int serverPort = new URL(serverURL).getPort();
 
-            startConnection(routerAddress, serverAddress);
-            runClient(routerAddress, serverAddress, request);
+            //Initialising Socket for Router and Server
+            SocketAddress routerSocketAddress = new InetSocketAddress(routerHost, routerPort);
+            InetSocketAddress serverSocketAddress = new InetSocketAddress(serverHost, serverPort);
+
+            //Establish connection with Router
+            establishRouterConnection(routerSocketAddress, serverSocketAddress);
+
+            //Send the User request across to the Server VIA the Router
+            executeClientRequest(routerSocketAddress, serverSocketAddress, clientRequest);
 
         }
     }
 
-    /**
-     * This method will establish connection and also parse the user request URL and set different value in
-     * Request class based on different conditions
-     *
-     * @param routerAddress Socket Address of the router
-     * @param serverAddress Socket Address of the server
-     */
-    private static void startConnection(SocketAddress routerAddress, InetSocketAddress serverAddress) throws Exception {
+    private static String retrieveServerURL(String serverURL, String clientRequest) {
+        String[] clientRequestSplitArray = clientRequest.split(" ");
+        for (String request : clientRequestSplitArray) {
+            if (request.startsWith("http://")) {
+                serverURL = request;
+            }
+        }
+        return serverURL;
+    }
 
-        try (DatagramChannel channel = DatagramChannel.open()) {
-            String msg = "Hi S";
+    private static String getInputFromUser() {
+        String request;
+        System.out.print("Enter command : ");
+        Scanner sc = new Scanner(System.in);
+        request = sc.nextLine();
+        if (request.isEmpty()) {
+            System.out.println("Invalid Command");
+            return null;
+        }
+        return request;
+    }
+
+    /**
+     * This method establishes the connection with the Router.
+     *
+     * @param routerSocketAddress Socket Address of the router
+     * @param serverSocketAddress Socket Address of the server
+     */
+    private static void establishRouterConnection(SocketAddress routerSocketAddress, InetSocketAddress serverSocketAddress) throws Exception {
+
+        //Open a Datagram Channel
+        try (DatagramChannel clientRouterChannel = DatagramChannel.open()) {
+            String clientMessage = "Hi Server, I am Client";
             sequenceNumber++;
-            // SYN
-            Packet p = new Packet.Builder().setType(0).setSequenceNumber(sequenceNumber)
-                    .setPortNumber(serverAddress.getPort()).setPeerAddress(serverAddress.getAddress())
-                    .setPayload(msg.getBytes()).create();
-            //setting the server address in the setPeerAddress
-            channel.send(p.toBuffer(), routerAddress); //Sending to the router
+
+            //Creating a Packet to send to the Router and setting the serverSocketAddress in the setPeerAddress
+            Packet clientPacket = new Packet.Builder().setType(0).setSequenceNumber(sequenceNumber)
+                    .setPortNumber(serverSocketAddress.getPort()).setPeerAddress(serverSocketAddress.getAddress())
+                    .setPayload(clientMessage.getBytes()).create();
+
+            //Sending the request to the Router
+            clientRouterChannel.send(clientPacket.toBuffer(), routerSocketAddress);
             System.out.println("Sending Hi from Client");
 
-            channel.configureBlocking(false);
+            clientRouterChannel.configureBlocking(false);
             Selector selector = Selector.open();
-            channel.register(selector, OP_READ);
+            clientRouterChannel.register(selector, OP_READ);
 
+            //setting the timeout for the client to receive the acknowledgement from the router
             selector.select(timeout);
 
-            Set<SelectionKey> keys = selector.selectedKeys();
-            if (keys.isEmpty()) {
-                System.out.println("No response after timeout\nSending again");
-                resend(channel, p, routerAddress);
+            Set<SelectionKey> selectorKeySet = selector.selectedKeys();
+            if (selectorKeySet.isEmpty()) {
+                System.out.println("No response received after Timeout: " + timeout);
+                System.out.println("Sending Request again to Establish Connection with Router");
+                resendRequestToRouter(clientRouterChannel, clientPacket, routerSocketAddress);
             }
 
-            ByteBuffer buf = ByteBuffer.allocate(Packet.MAX_LEN).order(ByteOrder.BIG_ENDIAN);
-            //buf.flip();
-            Packet response = Packet.fromBuffer(buf);
-            //buf.flip();
-            String payload = new String(response.getPayload(), StandardCharsets.UTF_8);
-            System.out.println(payload + "received..!");
-            receivedPackets.add(response.getSequenceNumber());
-            keys.clear();
+            //Setting max-size and order-type of the buffer
+            ByteBuffer responseBuffer = ByteBuffer.allocate(Packet.MAX_LEN).order(ByteOrder.BIG_ENDIAN);
 
+            //Extracting the payload from response from the Router
+            Packet response = Packet.fromBuffer(responseBuffer);
+            String payloadFromResponse = new String(response.getPayload(), StandardCharsets.UTF_8);
+            System.out.println("Payload From Response RECEIVED: " + payloadFromResponse);
+            receivedPackets.add(response.getSequenceNumber());
+            selectorKeySet.clear();
         }
     }
 
     /**
      * This method will resend request to router if timeout occurs
      */
-    private static void resend(DatagramChannel channel, Packet p, SocketAddress routerAddress) throws IOException {
+    private static void resendRequestToRouter(DatagramChannel clientRouterChannel, Packet clientPacket, SocketAddress routerSocketAddress) throws IOException {
 
-        channel.send(p.toBuffer(), routerAddress);
-        System.out.println(new String(p.getPayload()));
+        //Resending the request to the Router
+        clientRouterChannel.send(clientPacket.toBuffer(), routerSocketAddress);
+        System.out.println("RE-SENDING request to Router: \n" + new String(clientPacket.getPayload()));
 
-        if (new String(p.getPayload()).equals("Received")) {
+        // Checking if the acknowledgement is received from the Router
+        if (new String(clientPacket.getPayload()).equals("Received")) {
             acknowledgementCount++;
         }
 
-        channel.configureBlocking(false);
+        clientRouterChannel.configureBlocking(false);
         Selector selector = Selector.open();
-        channel.register(selector, OP_READ);
+        clientRouterChannel.register(selector, OP_READ);
         selector.select(timeout);
 
-        Set<SelectionKey> keys = selector.selectedKeys();
-        if (keys.isEmpty() && acknowledgementCount < 10) {
-
-            System.out.println("No response after timeout\nSending again");
-            resend(channel, p, routerAddress);
-
-        } else {
-            return;
+        Set<SelectionKey> selectorKeySet = selector.selectedKeys();
+        if (selectorKeySet.isEmpty() && acknowledgementCount < 10) {
+            System.out.println("No response received after Timeout: " + timeout);
+            System.out.println("Sending Request again to Establish Connection with Router");
+            resendRequestToRouter(clientRouterChannel, clientPacket, routerSocketAddress);
         }
     }
 
     /**
      * This method will send UDP request to router based on client input
      */
-    private static void runClient(SocketAddress routerAddr, InetSocketAddress serverAddr, String msg)
+    private static void executeClientRequest(SocketAddress routerAddr, InetSocketAddress serverAddr, String msg)
             throws IOException {
         String dir = System.getProperty("user.dir");
         try (DatagramChannel channel = DatagramChannel.open()) {
@@ -170,7 +191,7 @@ public class Client {
             Set<SelectionKey> keys = selector.selectedKeys();
             if (keys.isEmpty()) {
                 System.out.println("Timeout and no response!\nRetrying...");
-                resend(channel, p, routerAddr);
+                resendRequestToRouter(channel, p, routerAddr);
             }
 
             // We just want a single response.
@@ -201,7 +222,7 @@ public class Client {
 
                 keys = selector.selectedKeys();
                 if (keys.isEmpty()) {
-                    resend(channel, pAck, router);
+                    resendRequestToRouter(channel, pAck, router);
                 }
 
                 buf.flip();
