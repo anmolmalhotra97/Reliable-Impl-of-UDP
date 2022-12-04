@@ -10,8 +10,8 @@ import java.nio.ByteOrder;
  */
 public class Packet {
 
-    public static final int MIN_LEN = 11;
-    public static final int MAX_LEN = 110 + 1024;
+    public static final int MINIMUM_BYTES_FOR_UDP_REQUEST = 11;
+    public static final int MAXIMUM_BYTES_FOR_UDP_REQUEST = 110 + 1024;
 
     private final int type;
     private final long sequenceNumber;
@@ -73,7 +73,7 @@ public class Packet {
      * flipped and ready for get operations.
      */
     public ByteBuffer toBuffer() {
-        ByteBuffer buf = ByteBuffer.allocate(MAX_LEN).order(ByteOrder.BIG_ENDIAN);
+        ByteBuffer buf = ByteBuffer.allocate(MAXIMUM_BYTES_FOR_UDP_REQUEST).order(ByteOrder.BIG_ENDIAN);
         write(buf);
         buf.flip();
         return buf;
@@ -94,7 +94,7 @@ public class Packet {
      */
     public static Packet fromBuffer(ByteBuffer buf) throws IOException {
 
-        if (buf.limit() < MIN_LEN || buf.limit() > MAX_LEN) {
+        if (buf.limit() < MINIMUM_BYTES_FOR_UDP_REQUEST || buf.limit() > MAXIMUM_BYTES_FOR_UDP_REQUEST) {
             throw new IOException("Invalid length");
         }
 
@@ -118,7 +118,7 @@ public class Packet {
      * fromBytes creates a packet from the given array of bytes.
      */
     public static Packet fromBytes(byte[] bytes) throws IOException {
-        ByteBuffer buf = ByteBuffer.allocate(MAX_LEN).order(ByteOrder.BIG_ENDIAN);
+        ByteBuffer buf = ByteBuffer.allocate(MAXIMUM_BYTES_FOR_UDP_REQUEST).order(ByteOrder.BIG_ENDIAN);
         buf.put(bytes);
         buf.flip();
         return fromBuffer(buf);
